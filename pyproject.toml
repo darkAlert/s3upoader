@@ -3,7 +3,7 @@ build-backend = "setuptools.build_meta"
 requires = ["setuptools>=62.6", "wheel"]
 
 [project]
-name = "ava-s3-uploader"
+name = "s3upoader"
 description = "The uploader continuously monitors file creation events in a specific local directory to upload them to S3 storage in the background."
 authors = [
   { name="Anton Vitvitsky", email="darkalert2517@gmail.com" },

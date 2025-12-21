@@ -11,7 +11,7 @@ cd s3upoader
 
 ### Installation via pip
 ```
-pip3 installgit@github.com:darkAlert/s3upoader.git#egg=s3up
+pip3 install git+https://github.com/darkAlert/s3upoader.git#egg=s3upoader
 ```
 
 ### Uninstalling
