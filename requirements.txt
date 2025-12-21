@@ -1,0 +1,4 @@
+# ava-suproc
+suproc @ git+https://github.com/darkAlert/suproc.git#egg=suproc
+
+inotify-simple

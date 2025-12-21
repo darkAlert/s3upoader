@@ -1,0 +1,28 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools>=62.6", "wheel"]
+
+[project]
+name = "ava-s3-uploader"
+description = "The uploader continuously monitors file creation events in a specific local directory to upload them to S3 storage in the background."
+authors = [
+  { name="Anton Vitvitsky", email="darkalert2517@gmail.com" },
+]
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dynamic = ["version", "dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+version = {attr = "s3up.__version__"}
+
+[tool.setuptools.package-dir]
+s3up = "s3up"
+
+[project.scripts]
+s3up = "s3up.s3up:main"
+#s3up-init = "s3up.initializer:main"
