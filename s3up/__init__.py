@@ -5,4 +5,4 @@ specific local directory to upload them to S3 storage in the background.
 """
 from s3up import s3up
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"

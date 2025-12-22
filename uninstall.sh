@@ -1,11 +1,10 @@
 #!/bin/bash
 : '
 *****************************************
-S3Uploader Installer
+S3Uploader app Uninstaller
 © AVA, 2025
 *****************************************
 '
-rm -rf ./dist
-python3 -m build
+
 pip3 uninstall s3upoader -y
-pip3 install dist/s3upoader-0.1.3-py3-none-any.whl
+rm -rf $HOME/.s3up

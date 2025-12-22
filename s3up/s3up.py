@@ -7,12 +7,13 @@ import os
 import argparse
 import json
 import threading
+import time
 
 import inotify_simple
 import suproc.suproc as suproc
 
 from s3up.utils.logger import Logger
-from s3up.utils.utils import get_unique_id
+from s3up.utils.utils import Timestamp
 from s3up.utils.queue_wrapper import QueueWrapper
 from s3up.settings import PKJ_NAME, S3_CMD, WATCH_DIR, CMD_UPLOAD, CMD_ADD, CMD_WATCH
 
@@ -35,14 +36,17 @@ def upload_file_to_s3(file_path, s3_url, logger=None):
         return False
 
 
-def watch(watch_dir=WATCH_DIR, qmaxsize=2000):
+def watch(watch_dir=WATCH_DIR, qmaxsize=2000, heartbeat=60*15, timezone='UTC'):
     """
     Continuously watches metafile creation events to upload local files to S3 storage.
 
     Args:
         watch_dir (str): The directory where the metafile will be saved and where the watcher will watch events.
         qmaxsize (int): Max size of the upload queue.
+        heartbeat (int): Print the log every heartbeat seconds.
+        timezone (str): Time zone for the logging.
     """
+    Timestamp.set_timezone(timezone)
     logger = Logger.get_logger(PKJ_NAME)
 
     # Ensure the directory exists:
@@ -68,9 +72,12 @@ def watch(watch_dir=WATCH_DIR, qmaxsize=2000):
 
     # Infinite loop:
     try:
+        uploaded = 0
+        start_time = time.time()
+
         while True:
             # Read events (blocks until events occur):
-            for event in inotify.read():
+            for event in inotify.read(1000):
                 flags = inotify_simple.flags.from_mask(event.mask)
                 flag_names = f"{', '.join([flag.name for flag in flags])}"
                 metafile_path = os.path.join(watch_dir, event.name)
@@ -78,6 +85,14 @@ def watch(watch_dir=WATCH_DIR, qmaxsize=2000):
 
                 # Put to upload:
                 upload_queue.put(metafile_path)
+                uploaded += 1
+
+            # Print the log:
+            current_time = time.time()
+            if current_time - start_time >= heartbeat:
+                start_time = current_time
+                now = Timestamp.now(timestamp=False, timespec="seconds")
+                logger.info(f"{now}: uploaded={uploaded}, upload_queue={upload_queue.qsize()} ❤️")
 
     except KeyboardInterrupt:
         logger.warning(f"KeyboardInterrupt")
@@ -111,7 +126,7 @@ def _upload_worker(queue, logger):
                     continue
                 logger.info(f"Uploading {file_path} to {s3_url} ...")
 
-                if upload_file_to_s3(file_path, s3_url, logger=logger) == 0:
+                if upload_file_to_s3(file_path, s3_url, logger=logger):
                     logger.info(f"Uploaded successfully!")
 
                     # Remove the file:
@@ -130,7 +145,7 @@ def _upload_worker(queue, logger):
             continue
 
 
-def run_watching(watch_dir=WATCH_DIR, qmaxsize=2000, daemon=False, suproc_wrap=True, restart=False):
+def run_watching(watch_dir=WATCH_DIR, qmaxsize=2000, daemon=False, suproc_wrap=True, restart=False, timezone='UTC'):
     """
     Run the watching.
 
@@ -140,13 +155,14 @@ def run_watching(watch_dir=WATCH_DIR, qmaxsize=2000, daemon=False, suproc_wrap=T
         daemon (bool): Run in background as a daemon.
         suproc_wrap (bool): Use the suproc wrapper. It prevents multiple watch instances from running simultaneously.
         restart (bool): Restart the process if it is running.
+        timezone (str): Time zone for the logging.
     """
     if suproc_wrap:
         logger = Logger.get_logger(PKJ_NAME)
-        cmd = f"{PKJ_NAME} {CMD_WATCH} --watch-dir={watch_dir} --qmaxsize={qmaxsize} --no-suproc"
+        cmd = f"{PKJ_NAME} {CMD_WATCH} --watch-dir={watch_dir} --qmaxsize={qmaxsize} --timezone={timezone} --no-suproc"
         suproc.run_single_instance_proc(name=PKJ_NAME, logger=logger, daemon=daemon, force=restart, cmds=[cmd])
     else:
-        watch(watch_dir=watch_dir, qmaxsize=qmaxsize)
+        watch(watch_dir=watch_dir, qmaxsize=qmaxsize, timezone=timezone)
 
 
 def add_to_upload(src, dst, rm_after_upload=False, watch_dir=WATCH_DIR):
@@ -159,28 +175,46 @@ def add_to_upload(src, dst, rm_after_upload=False, watch_dir=WATCH_DIR):
         rm_after_upload (bool): Remove the source file after it has been successfully uploaded.
         watch_dir (str): The directory where the metafile will be saved and where the watcher will watch events.
     """
-    if not isinstance(src, list):
-        src = [src]
-    if not isinstance(dst, list):
-        dst = [dst]
-    assert len(src) == len(dst)
+    attempts = 10                # attempts to run the watching
 
-    # Run the watching if it is not running:
-    print('IS RUN:', suproc.is_running(PKJ_NAME))
-    if not suproc.is_running(PKJ_NAME):
-        run_watching(watch_dir=watch_dir, daemon=True)
+    try:
+        if not isinstance(src, list):
+            src = [src]
+        if not isinstance(dst, list):
+            dst = [dst]
+        assert len(src) == len(dst)
 
-    # Generate metadata:
-    metadata = {'src': src, 'dst': dst, 'rm': rm_after_upload}
+        ######################################################
+        # Run the watching if it is not running:
+        if not suproc.is_running(PKJ_NAME):
+            run_watching(watch_dir=watch_dir, daemon=True)
 
-    while True:
-        meta_path = os.path.join(watch_dir, str(get_unique_id()))
+            # Wait until the process is started:
+            for i in range(attempts):
+                if suproc.is_running(PKJ_NAME):
+                    break
+                if i >= attempts-1:
+                    raise EnvironmentError
+                time.sleep(0.1)
+        ######################################################
 
-        if not os.path.exists(meta_path):
-            with open(meta_path, 'w') as f:
-                json.dump(metadata, f, indent=3)
+        # Generate metadata:
+        metadata = {'src': src, 'dst': dst, 'rm': rm_after_upload}
 
-            return True
+        while True:
+            meta_path = os.path.join(watch_dir, str(Timestamp.get_unique_id()))
+
+            if not os.path.exists(meta_path):
+                with open(meta_path, 'w') as f:
+                    json.dump(metadata, f, indent=3)
+
+                return True
+
+    except Exception as e:
+        logger = Logger.get_logger(PKJ_NAME)
+        logger.error(f'An error occurred while adding to the uploading:')
+        logger.error(e)
+        return False
 
 
 def main():
@@ -244,6 +278,10 @@ def main():
         help='Max size of the upload queue.'
     )
     parser_watch.add_argument(
+        '--timezone', type=str, default='UTC',
+        help='Time zone for the logging.'
+    )
+    parser_watch.add_argument(
         '-d', '--daemon', action='store_true', default=False,
         help='Run in background as a daemon.'
     )
@@ -281,6 +319,7 @@ def main():
         run_watching(
             watch_dir=args.watch_dir,
             qmaxsize=args.qmaxsize,
+            timezone=args.timezone,
             daemon=args.daemon,
             suproc_wrap=not args.no_suproc
         )
