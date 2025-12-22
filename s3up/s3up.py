@@ -29,10 +29,10 @@ def upload_file_to_s3(file_path, s3_url, logger=None):
     # Command to execute:
     cmd = f"{S3_CMD} cp {file_path} {s3_url}"
 
-    if suproc.run_single_instance_proc(name=PKJ_NAME, logger=logger, cmds=[cmd]) >= 0:
-        return 0
+    if suproc.run_single_instance_proc(name=f'{PKJ_NAME}_upload', logger=logger, cmds=[cmd]) >= 0:
+        return True
     else:
-        return -1
+        return False
 
 
 def watch(watch_dir=WATCH_DIR, qmaxsize=2000):
@@ -64,6 +64,7 @@ def watch(watch_dir=WATCH_DIR, qmaxsize=2000):
         metafile_path = os.path.join(watch_dir, file)
         if os.path.isfile(metafile_path):
             upload_queue.put(metafile_path)
+            logger.info(f'Metafile found: {metafile_path}')
 
     # Infinite loop:
     try:
@@ -73,7 +74,7 @@ def watch(watch_dir=WATCH_DIR, qmaxsize=2000):
                 flags = inotify_simple.flags.from_mask(event.mask)
                 flag_names = f"{', '.join([flag.name for flag in flags])}"
                 metafile_path = os.path.join(watch_dir, event.name)
-                logger.info(f"[event: {flag_names}, filename: {metafile_path}")
+                logger.info(f"event: {flag_names}, filename: {metafile_path}")
 
                 # Put to upload:
                 upload_queue.put(metafile_path)
@@ -93,7 +94,7 @@ def watch(watch_dir=WATCH_DIR, qmaxsize=2000):
 
 
 def _upload_worker(queue, logger):
-    while not queue.stop_event.is_set():
+    while not queue.stop.is_set():
         # Get metafile path:
         metafile_path = queue.get()
 
@@ -105,6 +106,9 @@ def _upload_worker(queue, logger):
 
             # Read the metadata and upload files to s3:
             for file_path, s3_url in zip(metadata['src'], metadata['dst']):
+                if not os.path.exists(file_path):
+                    logger.warning(f"File does not exist: {file_path}")
+                    continue
                 logger.info(f"Uploading {file_path} to {s3_url} ...")
 
                 if upload_file_to_s3(file_path, s3_url, logger=logger) == 0:
@@ -126,39 +130,6 @@ def _upload_worker(queue, logger):
             continue
 
 
-def add_to_upload(src, dst, rm_after_upload=False, watch_dir=WATCH_DIR):
-    """
-    Add a file(s) to upload. This file(s) will be uploaded to S3 storage in the background.
-
-    Args:
-        src (str or list[str]): The source file or list of files to be uploaded.
-        dst (str or list[str]): The URL of the S3 storage where the files will be uploaded.
-        rm_after_upload (bool): Remove the source file after it has been successfully uploaded.
-        watch_dir (str): The directory where the metafile will be saved and where the watcher will watch events.
-    """
-    if not isinstance(src, list):
-        src = [src]
-    if not isinstance(dst, list):
-        dst = [dst]
-    assert len(src) == len(dst)
-
-    # Run the watching if it is not running:
-    if not suproc.is_running(PKJ_NAME):
-        run_watching(watch_dir=watch_dir)
-
-    # Generate metadata:
-    metadata = {'src': src, 'dst': dst, 'rm': rm_after_upload}
-
-    while True:
-        meta_path = os.path.join(watch_dir, str(get_unique_id()))
-
-        if not os.path.exists(meta_path):
-            with open(meta_path, 'w') as f:
-                json.dump(metadata, f, indent=3)
-
-            return True
-
-
 def run_watching(watch_dir=WATCH_DIR, qmaxsize=2000, daemon=False, suproc_wrap=True, restart=False):
     """
     Run the watching.
@@ -176,6 +147,40 @@ def run_watching(watch_dir=WATCH_DIR, qmaxsize=2000, daemon=False, suproc_wrap=T
         suproc.run_single_instance_proc(name=PKJ_NAME, logger=logger, daemon=daemon, force=restart, cmds=[cmd])
     else:
         watch(watch_dir=watch_dir, qmaxsize=qmaxsize)
+
+
+def add_to_upload(src, dst, rm_after_upload=False, watch_dir=WATCH_DIR):
+    """
+    Add a file(s) to upload. This file(s) will be uploaded to S3 storage in the background.
+
+    Args:
+        src (str or list[str]): The source file or list of files to be uploaded.
+        dst (str or list[str]): The URL of the S3 storage where the files will be uploaded.
+        rm_after_upload (bool): Remove the source file after it has been successfully uploaded.
+        watch_dir (str): The directory where the metafile will be saved and where the watcher will watch events.
+    """
+    if not isinstance(src, list):
+        src = [src]
+    if not isinstance(dst, list):
+        dst = [dst]
+    assert len(src) == len(dst)
+
+    # Run the watching if it is not running:
+    print('IS RUN:', suproc.is_running(PKJ_NAME))
+    if not suproc.is_running(PKJ_NAME):
+        run_watching(watch_dir=watch_dir, daemon=True)
+
+    # Generate metadata:
+    metadata = {'src': src, 'dst': dst, 'rm': rm_after_upload}
+
+    while True:
+        meta_path = os.path.join(watch_dir, str(get_unique_id()))
+
+        if not os.path.exists(meta_path):
+            with open(meta_path, 'w') as f:
+                json.dump(metadata, f, indent=3)
+
+            return True
 
 
 def main():
@@ -232,7 +237,7 @@ def main():
     # Create a subparser for the 'WATCH' command:
     parser_watch = subparsers.add_parser(
         CMD_WATCH, parents=[parent_parser],
-        help=f"Continuously watches metafile creation events to upload local files to S3 storage."
+        help=f"Run the watching."
     )
     parser_watch.add_argument(
         '--qmaxsize', type=int, default=2000,
