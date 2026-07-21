@@ -18,7 +18,7 @@ from s3up.utils.queue_wrapper import QueueWrapper
 from s3up.settings import PKJ_NAME, S3_CMD, WATCH_DIR, CMD_UPLOAD, CMD_ADD, CMD_WATCH
 
 
-def upload_file_to_s3(file_path, s3_url, logger=None):
+def upload_file_to_s3(file_path, s3_url, logger=None, proc_name=None):
     """
     Upload a local file to S3 storage.
 
@@ -29,8 +29,9 @@ def upload_file_to_s3(file_path, s3_url, logger=None):
     """
     # Command to execute:
     cmd = f"{S3_CMD} cp {file_path} {s3_url}"
+    proc_name = f'{PKJ_NAME}_upload' if proc_name is None else proc_name
 
-    if suproc.run_single_instance_proc(name=f'{PKJ_NAME}_upload', logger=logger, cmds=[cmd]) >= 0:
+    if suproc.run_single_instance_proc(name=proc_name, logger=logger, cmds=[cmd]) >= 0:
         return True
     else:
         return False
@@ -91,8 +92,8 @@ def watch(watch_dir=WATCH_DIR, qmaxsize=2000, heartbeat=60*15, timezone='UTC'):
             current_time = time.time()
             if current_time - start_time >= heartbeat:
                 start_time = current_time
-                now = Timestamp.now(timestamp=False, timespec="seconds")
-                logger.info(f"{now}: uploaded={uploaded}, upload_queue={upload_queue.qsize()} ❤️")
+                now = Timestamp.now(timestamp=False, timespec="seconds", sep='_')
+                logger.info(f"{now} uploaded={uploaded}, upload_queue={upload_queue.qsize()} ❤️")
 
     except KeyboardInterrupt:
         logger.warning(f"KeyboardInterrupt")
