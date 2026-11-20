@@ -1,5 +1,5 @@
 # ava-suproc
-suproc @ git+https://github.com/darkAlert/suproc.git#egg=suproc
+suproc @ git+https://github.com/darkAlert/suproc.git
 
 inotify-simple
 pytz
